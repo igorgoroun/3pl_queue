@@ -1,4 +1,5 @@
 import os
+import sys
 import dramatiq
 import logging
 import json
@@ -42,6 +43,28 @@ odoo = Client(
 )
 
 
+@dramatiq.actor(queue_name='default')
+def update_auth_data(**kwargs):
+    _logger.info('Updating auth data')
+    try:
+        # find all data in redis
+        auth_keys = cache_db.keys('partner:*')
+        _logger.info(f"Found existing auth keys: {auth_keys}")
+        # drop all existed from redis
+        if auth_keys:
+            cache_db.delete(*auth_keys)
+        # get all active api-counterparties from odoo
+        odoo_active_api = odoo['res.partner'].list_auth_data([], **kwargs)
+        _logger.info(f"Active api-counterparties: {odoo_active_api}")
+        for login, cred in odoo_active_api.items():
+            cache_db.set(f"partner:{login}", json.dumps(cred))
+
+    except Exception as e:
+        _logger.error(str(e))
+        raise e
+    return
+
+
 @dramatiq.actor(queue_name='inbound')
 def create_inbound_order(*args, **kwargs):
     _logger.info(f'Creating inbound order for request')
@@ -59,7 +82,10 @@ def create_inbound_order(*args, **kwargs):
     return None
 
 
-# if __name__ == '__main__':
+if __name__ == '__main__':
+    print(sys.argv)
+    if sys.argv and len(sys.argv) == 2 and sys.argv[1] == 'auth':
+        update_auth_data.send()
 #     data = {
 #         "uuid": str(uuid4()),
 #         "partner_id": 23,
